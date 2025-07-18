@@ -14,8 +14,21 @@ spec:
     spec:
       nodeSelector:
         "kubernetes.io/os": linux
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 3000
+        fsGroup: 2000
       containers:
         - name: product-service
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop:
+                - ALL
           image: ghcr.io/azure-samples/aks-store-demo/product-service:latest
           ports:
             - containerPort: 3002
