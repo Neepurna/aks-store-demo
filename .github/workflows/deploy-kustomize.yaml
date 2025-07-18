@@ -69,7 +69,7 @@ jobs:
   build-and-push-images:
     runs-on: ubuntu-latest
     needs: validate-kustomize
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: false  # Disabled until container registry access is configured
     permissions:
       contents: read
       packages: write
@@ -125,8 +125,8 @@ jobs:
 
   deploy-dev:
     runs-on: ubuntu-latest
-    needs: [validate-kustomize, build-and-push-images]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [validate-kustomize]
+    if: false  # Disabled until Azure credentials are configured
     environment: dev
     
     steps:
@@ -143,8 +143,15 @@ jobs:
           curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
           sudo mv kustomize /usr/local/bin/
 
+      - name: Check Azure credentials
+        run: |
+          if [[ -z "${{ secrets.AZURE_CREDENTIALS }}" ]]; then
+            echo "::warning::Azure credentials not configured. Skipping deployment."
+            exit 0
+          fi
+
       - name: Azure Login
-        uses: azure/login@v1
+        uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
@@ -194,7 +201,7 @@ jobs:
   deploy-staging:
     runs-on: ubuntu-latest
     needs: deploy-dev
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging'
+    if: false  # Disabled until Azure credentials are configured
     environment: staging
     
     steps:
