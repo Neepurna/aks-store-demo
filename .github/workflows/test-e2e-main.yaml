@@ -3,11 +3,13 @@
 name: test-e2e-main
 
 on:
-  push:
-    branches:
-      - main
-
+  # Disabled until Azure credentials are configured
   workflow_dispatch:
+    inputs:
+      force_run:
+        description: 'Force run this workflow (requires Azure credentials)'
+        required: false
+        default: 'false'
 
 permissions:
   id-token: write
@@ -15,6 +17,7 @@ permissions:
 
 jobs:
   deploy:
+    if: github.event.inputs.force_run == 'true'
     outputs:
       storeAdminIp: ${{ steps.kubectl_get_service.outputs.STORE_ADMIN_IP }}
       storeFrontIp: ${{ steps.kubectl_get_service.outputs.STORE_FRONT_IP }}
