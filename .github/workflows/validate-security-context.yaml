@@ -1,0 +1,46 @@
+name: Validate SecurityContext Implementation
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'kustomize/**'
+      - 'scripts/validate-security-context.sh'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'kustomize/**'
+      - 'scripts/validate-security-context.sh'
+  workflow_dispatch:
+
+jobs:
+  validate-security-context:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Install kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+
+      - name: Validate SecurityContext implementation
+        run: |
+          chmod +x scripts/validate-security-context.sh
+          ./scripts/validate-security-context.sh
+
+      - name: Upload validation artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-context-validation
+          path: |
+            /tmp/base-output.yaml
+            kustomize/base/product-service.yaml
+          retention-days: 30
