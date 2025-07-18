@@ -1,0 +1,215 @@
+name: Health Check - Deployed Applications
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to check'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ secrets.AZURE_RESOURCE_GROUP }}
+          cluster-name: ${{ secrets.AZURE_CLUSTER_NAME }}
+
+      - name: Set environment variables
+        run: |
+          ENV="${{ github.event.inputs.environment || 'dev' }}"
+          if [ "$ENV" == "dev" ]; then
+            echo "NAMESPACE=aks-store-demo" >> $GITHUB_ENV
+            echo "PREFIX=" >> $GITHUB_ENV
+          elif [ "$ENV" == "staging" ]; then
+            echo "NAMESPACE=aks-store-demo-staging" >> $GITHUB_ENV
+            echo "PREFIX=staging-" >> $GITHUB_ENV
+          elif [ "$ENV" == "prod" ]; then
+            echo "NAMESPACE=aks-store-demo-prod" >> $GITHUB_ENV
+            echo "PREFIX=prod-" >> $GITHUB_ENV
+          fi
+
+      - name: Check deployment status
+        run: |
+          echo "🔍 Checking deployment status in ${{ env.NAMESPACE }}..."
+          
+          # Check if namespace exists
+          if ! kubectl get namespace ${{ env.NAMESPACE }} > /dev/null 2>&1; then
+            echo "❌ Namespace ${{ env.NAMESPACE }} not found"
+            exit 1
+          fi
+          
+          # List of services to check
+          services=("store-front" "store-admin" "order-service" "product-service" "makeline-service")
+          
+          for service in "${services[@]}"; do
+            deployment_name="${{ env.PREFIX }}$service"
+            echo "Checking $deployment_name..."
+            
+            # Check if deployment exists
+            if kubectl get deployment "$deployment_name" -n ${{ env.NAMESPACE }} > /dev/null 2>&1; then
+              # Check deployment status
+              if kubectl rollout status deployment/"$deployment_name" -n ${{ env.NAMESPACE }} --timeout=60s; then
+                echo "✅ $deployment_name is healthy"
+              else
+                echo "❌ $deployment_name is not healthy"
+              fi
+            else
+              echo "⚠️  $deployment_name deployment not found"
+            fi
+          done
+
+      - name: Check service endpoints
+        run: |
+          echo "🌐 Checking service endpoints..."
+          kubectl get svc -n ${{ env.NAMESPACE }} -o wide
+          
+          # Check if services are accessible
+          services=("store-front" "store-admin" "order-service" "product-service")
+          
+          for service in "${services[@]}"; do
+            service_name="${{ env.PREFIX }}$service"
+            if kubectl get svc "$service_name" -n ${{ env.NAMESPACE }} > /dev/null 2>&1; then
+              echo "✅ Service $service_name exists"
+              # Get service details
+              kubectl get svc "$service_name" -n ${{ env.NAMESPACE }} -o jsonpath='{.spec.type}{"\n"}'
+            else
+              echo "❌ Service $service_name not found"
+            fi
+          done
+
+      - name: Check pod health
+        run: |
+          echo "🏥 Checking pod health..."
+          
+          # Get all pods in namespace
+          kubectl get pods -n ${{ env.NAMESPACE }} -o wide
+          
+          # Check for unhealthy pods
+          unhealthy_pods=$(kubectl get pods -n ${{ env.NAMESPACE }} --field-selector=status.phase!=Running -o jsonpath='{.items[*].metadata.name}')
+          
+          if [ -n "$unhealthy_pods" ]; then
+            echo "❌ Found unhealthy pods: $unhealthy_pods"
+            for pod in $unhealthy_pods; do
+              echo "Describing pod: $pod"
+              kubectl describe pod "$pod" -n ${{ env.NAMESPACE }}
+            done
+          else
+            echo "✅ All pods are healthy"
+          fi
+
+      - name: Check resource usage
+        run: |
+          echo "📊 Checking resource usage..."
+          
+          # Check CPU and memory usage
+          kubectl top pods -n ${{ env.NAMESPACE }} --sort-by=cpu || echo "Metrics server not available"
+          kubectl top pods -n ${{ env.NAMESPACE }} --sort-by=memory || echo "Metrics server not available"
+
+      - name: Run basic connectivity tests
+        run: |
+          echo "🔗 Running connectivity tests..."
+          
+          # Test internal service connectivity
+          if kubectl get pod -n ${{ env.NAMESPACE }} -l app=store-front -o name | head -1; then
+            pod_name=$(kubectl get pod -n ${{ env.NAMESPACE }} -l app=store-front -o jsonpath='{.items[0].metadata.name}')
+            
+            # Test connectivity to order service
+            if kubectl exec -n ${{ env.NAMESPACE }} "$pod_name" -- curl -f -s http://order-service:3000/health > /dev/null 2>&1; then
+              echo "✅ store-front can reach order-service"
+            else
+              echo "❌ store-front cannot reach order-service"
+            fi
+          fi
+
+      - name: Generate health report
+        run: |
+          echo "📋 Generating health report..."
+          
+          cat > health-report.md << EOF
+          # Health Check Report
+          
+          **Environment**: ${{ github.event.inputs.environment || 'dev' }}
+          **Namespace**: ${{ env.NAMESPACE }}
+          **Timestamp**: $(date -u)
+          
+          ## Summary
+          
+          \`\`\`
+          $(kubectl get pods -n ${{ env.NAMESPACE }} --no-headers | wc -l) total pods
+          $(kubectl get pods -n ${{ env.NAMESPACE }} --field-selector=status.phase=Running --no-headers | wc -l) running pods
+          $(kubectl get svc -n ${{ env.NAMESPACE }} --no-headers | wc -l) services
+          $(kubectl get deployments -n ${{ env.NAMESPACE }} --no-headers | wc -l) deployments
+          \`\`\`
+          
+          ## Detailed Status
+          
+          ### Deployments
+          \`\`\`
+          $(kubectl get deployments -n ${{ env.NAMESPACE }})
+          \`\`\`
+          
+          ### Services
+          \`\`\`
+          $(kubectl get svc -n ${{ env.NAMESPACE }})
+          \`\`\`
+          
+          ### Pods
+          \`\`\`
+          $(kubectl get pods -n ${{ env.NAMESPACE }})
+          \`\`\`
+          EOF
+
+      - name: Upload health report
+        uses: actions/upload-artifact@v3
+        with:
+          name: health-report-${{ github.event.inputs.environment || 'dev' }}
+          path: health-report.md
+
+      - name: Notify on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const env = '${{ github.event.inputs.environment || "dev" }}';
+            
+            await github.rest.issues.create({
+              owner,
+              repo,
+              title: `Health Check Failed - ${env} Environment`,
+              body: `The health check for the ${env} environment has failed. Please check the workflow logs for more details.
+              
+              **Environment**: ${env}
+              **Workflow**: ${context.workflow}
+              **Run ID**: ${context.runId}
+              **Timestamp**: ${new Date().toISOString()}
+              
+              [View workflow run](${context.payload.repository.html_url}/actions/runs/${context.runId})`,
+              labels: ['health-check', 'failure', env]
+            });

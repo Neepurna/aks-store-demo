@@ -1,0 +1,191 @@
+name: Deploy AKS Store Demo with Kustomize (No Service Principal)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'kustomize/**'
+      - 'src/**'
+      - '.github/workflows/deploy-kustomize-simple.yaml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'kustomize/**'
+      - 'src/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  validate-kustomize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Install kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+
+      - name: Validate kustomize base configuration
+        run: |
+          cd kustomize/base
+          kustomize build . > base-output.yaml
+          kubectl apply --dry-run=client -f base-output.yaml
+
+      - name: Validate kustomize dev overlay
+        run: |
+          cd kustomize/overlays/dev
+          kustomize build . > dev-output.yaml
+          kubectl apply --dry-run=client -f dev-output.yaml
+
+      - name: Upload kustomize artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: kustomize-manifests
+          path: |
+            kustomize/base/base-output.yaml
+            kustomize/overlays/dev/dev-output.yaml
+
+  build-and-push-images:
+    runs-on: ubuntu-latest
+    needs: validate-kustomize
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        apps: [
+          ai-service,
+          makeline-service,
+          order-service,
+          product-service,
+          store-admin,
+          store-front,
+          virtual-customer,
+          virtual-worker
+        ]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ matrix.apps }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: src/${{ matrix.apps }}
+          file: src/${{ matrix.apps }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  deploy-dev:
+    runs-on: ubuntu-latest
+    needs: [validate-kustomize, build-and-push-images]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: dev
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Install kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+
+      - name: Azure CLI Login
+        uses: azure/login@v1
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "2f102bb6-9366-4011-bd8c-7c072753c204",
+              "tenantId": "b5dc206c-17fd-4b06-8bc8-24f0bb650229"
+            }
+
+      - name: Set AKS context
+        run: |
+          az aks get-credentials --resource-group lab1-resourcegroup --name lab01cluster --overwrite-existing
+
+      - name: Create namespace if not exists
+        run: |
+          kubectl create namespace aks-store-demo --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy to AKS using Kustomize
+        run: |
+          cd kustomize/overlays/dev
+          kustomize edit set image \
+            ghcr.io/azure-samples/aks-store-demo/ai-service:latest=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ai-service:sha-${{ github.sha }} \
+            ghcr.io/azure-samples/aks-store-demo/makeline-service:latest=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/makeline-service:sha-${{ github.sha }} \
+            ghcr.io/azure-samples/aks-store-demo/order-service:latest=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/order-service:sha-${{ github.sha }} \
+            ghcr.io/azure-samples/aks-store-demo/product-service:latest=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/product-service:sha-${{ github.sha }} \
+            ghcr.io/azure-samples/aks-store-demo/store-admin:latest=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/store-admin:sha-${{ github.sha }} \
+            ghcr.io/azure-samples/aks-store-demo/store-front:latest=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/store-front:sha-${{ github.sha }} \
+            ghcr.io/azure-samples/aks-store-demo/virtual-customer:latest=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/virtual-customer:sha-${{ github.sha }} \
+            ghcr.io/azure-samples/aks-store-demo/virtual-worker:latest=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/virtual-worker:sha-${{ github.sha }}
+          
+          kustomize build . | kubectl apply -n aks-store-demo -f -
+
+      - name: Verify deployment
+        run: |
+          kubectl rollout status deployment/store-front -n aks-store-demo --timeout=300s
+          kubectl rollout status deployment/store-admin -n aks-store-demo --timeout=300s
+          kubectl rollout status deployment/order-service -n aks-store-demo --timeout=300s
+          kubectl rollout status deployment/product-service -n aks-store-demo --timeout=300s
+          kubectl rollout status deployment/makeline-service -n aks-store-demo --timeout=300s
+
+      - name: Get service endpoints
+        run: |
+          echo "=== Services ==="
+          kubectl get svc -n aks-store-demo
+          echo "=== Pods ==="
+          kubectl get pods -n aks-store-demo

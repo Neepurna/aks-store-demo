@@ -1,0 +1,67 @@
+name: Cleanup AKS Store Demo
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to cleanup'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      confirm:
+        description: 'Type "confirm" to proceed with cleanup'
+        required: true
+        type: string
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'confirm'
+    environment: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Install kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ secrets.AZURE_RESOURCE_GROUP }}
+          cluster-name: ${{ secrets.AZURE_CLUSTER_NAME }}
+
+      - name: Delete AKS Store Demo resources
+        run: |
+          NAMESPACE="aks-store-demo"
+          if [ "${{ github.event.inputs.environment }}" == "staging" ]; then
+            NAMESPACE="aks-store-demo-staging"
+          fi
+          
+          echo "Deleting resources in namespace: $NAMESPACE"
+          
+          # Delete using kustomize
+          cd kustomize/overlays/dev
+          kustomize build . | kubectl delete -n $NAMESPACE -f - --ignore-not-found=true
+          
+          # Delete namespace
+          kubectl delete namespace $NAMESPACE --ignore-not-found=true
+          
+          echo "Cleanup completed for environment: ${{ github.event.inputs.environment }}"

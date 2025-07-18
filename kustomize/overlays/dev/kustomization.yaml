@@ -1,4 +1,11 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+
 resources:
   - ../../base
+
+namespace: aks-store-demo
+
+commonLabels:
+  environment: development
+  version: v1.0.0

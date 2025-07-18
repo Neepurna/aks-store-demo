@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+namePrefix: staging-
+namespace: aks-store-demo-staging
+
+replicas:
+  - name: store-front
+    count: 2
+  - name: store-admin
+    count: 2
+  - name: order-service
+    count: 2
+  - name: product-service
+    count: 2
+
+patchesStrategicMerge:
+  - resources-patch.yaml
+
+commonLabels:
+  environment: staging
+  version: v1.0.0

@@ -232,3 +232,95 @@ $(KIND): $(LOCALBIN)
 	@if [ `$(KIND) get clusters | wc -l` -eq 0 ]; then \
 		$(KIND) create cluster; \
 	fi
+
+##@ Kustomize CI/CD
+
+.PHONY: kustomize-validate
+kustomize-validate: ## Validate all kustomize configurations
+	@echo "Validating kustomize base configuration..."
+	@cd kustomize/base && kustomize build . > /tmp/base-output.yaml
+	@kubectl apply --dry-run=client -f /tmp/base-output.yaml
+	@echo "Validating kustomize dev overlay..."
+	@cd kustomize/overlays/dev && kustomize build . > /tmp/dev-output.yaml
+	@kubectl apply --dry-run=client -f /tmp/dev-output.yaml
+	@echo "Validating kustomize staging overlay..."
+	@cd kustomize/overlays/staging && kustomize build . > /tmp/staging-output.yaml
+	@kubectl apply --dry-run=client -f /tmp/staging-output.yaml
+	@echo "Validating kustomize prod overlay..."
+	@cd kustomize/overlays/prod && kustomize build . > /tmp/prod-output.yaml
+	@kubectl apply --dry-run=client -f /tmp/prod-output.yaml
+	@echo "✅ All kustomize configurations are valid!"
+
+.PHONY: kustomize-build
+kustomize-build: ## Build kustomize configurations for all environments
+	@echo "Building kustomize configurations..."
+	@mkdir -p build/kustomize
+	@cd kustomize/base && kustomize build . > ../../build/kustomize/base.yaml
+	@cd kustomize/overlays/dev && kustomize build . > ../../../build/kustomize/dev.yaml
+	@cd kustomize/overlays/staging && kustomize build . > ../../../build/kustomize/staging.yaml
+	@cd kustomize/overlays/prod && kustomize build . > ../../../build/kustomize/prod.yaml
+	@echo "✅ Kustomize configurations built in build/kustomize/"
+
+.PHONY: kustomize-deploy-dev
+kustomize-deploy-dev: ## Deploy to dev environment using kustomize
+	@echo "Deploying to dev environment..."
+	@kubectl create namespace aks-store-demo --dry-run=client -o yaml | kubectl apply -f -
+	@cd kustomize/overlays/dev && kustomize build . | kubectl apply -n aks-store-demo -f -
+	@echo "✅ Deployed to dev environment"
+
+.PHONY: kustomize-deploy-staging
+kustomize-deploy-staging: ## Deploy to staging environment using kustomize
+	@echo "Deploying to staging environment..."
+	@kubectl create namespace aks-store-demo-staging --dry-run=client -o yaml | kubectl apply -f -
+	@cd kustomize/overlays/staging && kustomize build . | kubectl apply -n aks-store-demo-staging -f -
+	@echo "✅ Deployed to staging environment"
+
+.PHONY: kustomize-deploy-prod
+kustomize-deploy-prod: ## Deploy to prod environment using kustomize
+	@echo "Deploying to prod environment..."
+	@kubectl create namespace aks-store-demo-prod --dry-run=client -o yaml | kubectl apply -f -
+	@cd kustomize/overlays/prod && kustomize build . | kubectl apply -n aks-store-demo-prod -f -
+	@echo "✅ Deployed to prod environment"
+
+.PHONY: kustomize-cleanup-dev
+kustomize-cleanup-dev: ## Clean up dev environment
+	@echo "Cleaning up dev environment..."
+	@cd kustomize/overlays/dev && kustomize build . | kubectl delete -n aks-store-demo -f - --ignore-not-found=true
+	@kubectl delete namespace aks-store-demo --ignore-not-found=true
+	@echo "✅ Dev environment cleaned up"
+
+.PHONY: kustomize-cleanup-staging
+kustomize-cleanup-staging: ## Clean up staging environment
+	@echo "Cleaning up staging environment..."
+	@cd kustomize/overlays/staging && kustomize build . | kubectl delete -n aks-store-demo-staging -f - --ignore-not-found=true
+	@kubectl delete namespace aks-store-demo-staging --ignore-not-found=true
+	@echo "✅ Staging environment cleaned up"
+
+.PHONY: kustomize-cleanup-prod
+kustomize-cleanup-prod: ## Clean up prod environment
+	@echo "Cleaning up prod environment..."
+	@cd kustomize/overlays/prod && kustomize build . | kubectl delete -n aks-store-demo-prod -f - --ignore-not-found=true
+	@kubectl delete namespace aks-store-demo-prod --ignore-not-found=true
+	@echo "✅ Prod environment cleaned up"
+
+.PHONY: kustomize-status
+kustomize-status: ## Check status of all deployments
+	@echo "=== Development Environment Status ==="
+	@kubectl get pods,svc,deployments -n aks-store-demo 2>/dev/null || echo "Dev environment not found"
+	@echo ""
+	@echo "=== Staging Environment Status ==="
+	@kubectl get pods,svc,deployments -n aks-store-demo-staging 2>/dev/null || echo "Staging environment not found"
+	@echo ""
+	@echo "=== Production Environment Status ==="
+	@kubectl get pods,svc,deployments -n aks-store-demo-prod 2>/dev/null || echo "Production environment not found"
+
+.PHONY: setup-github-actions
+setup-github-actions: ## Run GitHub Actions setup script
+	@./scripts/setup-github-actions.sh
+
+.PHONY: install-kustomize
+install-kustomize: ## Install kustomize CLI tool
+	@echo "Installing kustomize..."
+	@curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+	@sudo mv kustomize /usr/local/bin/
+	@echo "✅ Kustomize installed successfully"
