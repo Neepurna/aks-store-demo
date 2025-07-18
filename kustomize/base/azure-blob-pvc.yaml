@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: azure-blob-pvc
+  namespace: aks-store-demo
+  labels:
+    app: product-service
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: azure-blob-storage
+  selector:
+    matchLabels:
+      app: product-service
+      storage-tier: blob

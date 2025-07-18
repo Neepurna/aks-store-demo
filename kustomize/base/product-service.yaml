@@ -12,6 +12,7 @@ spec:
       labels:
         app: product-service
     spec:
+      automountServiceAccountToken: false
       nodeSelector:
         "kubernetes.io/os": linux
       securityContext:
@@ -29,19 +30,27 @@ spec:
             capabilities:
               drop:
                 - ALL
-          image: ghcr.io/azure-samples/aks-store-demo/product-service:latest
+          image: ghcr.io/azure-samples/aks-store-demo/product-service:v1.0.0
           ports:
             - containerPort: 3002
           env:
             - name: AI_SERVICE_URL
-              value: "http://ai-service:5001/"
+              value: ""
+            - name: STORAGE_PATH
+              value: "/mnt/azure-blob"
+          volumeMounts:
+            - name: azure-blob-volume
+              mountPath: /mnt/azure-blob
+              readOnly: false
           resources:
             requests:
               cpu: 1m
               memory: 1Mi
+              ephemeral-storage: 1Gi
             limits:
               cpu: 2m
               memory: 20Mi
+              ephemeral-storage: 2Gi
           readinessProbe:
             httpGet:
               path: /health
@@ -56,6 +65,10 @@ spec:
             failureThreshold: 5
             initialDelaySeconds: 3
             periodSeconds: 3
+      volumes:
+        - name: azure-blob-volume
+          persistentVolumeClaim:
+            claimName: azure-blob-pvc
 ---
 apiVersion: v1
 kind: Service

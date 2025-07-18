@@ -1,6 +1,10 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
+  - azure-blob-storageclass.yaml
+  - azure-storage-secret.yaml
+  - azure-blob-pv.yaml
+  - azure-blob-pvc.yaml
   - makeline-service.yaml
   - mongodb.yaml
   - order-service.yaml

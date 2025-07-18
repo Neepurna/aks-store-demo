@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: azure-blob-pv
+  labels:
+    app: product-service
+    storage-tier: blob
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: azure-blob-storage
+  csi:
+    driver: blob.csi.azure.com
+    readOnly: false
+    volumeHandle: azure-blob-pv  # Unique volume handle
+    volumeAttributes:
+      containerName: product-data
+    nodeStageSecretRef:
+      name: azure-storage-secret
+      namespace: aks-store-demo
